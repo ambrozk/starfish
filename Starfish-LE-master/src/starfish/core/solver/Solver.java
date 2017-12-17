@@ -298,6 +298,8 @@ public abstract class Solver
 	public int solveLinearGS(MeshData mesh_data[])
 	{
 		double norm = lin_tol;
+		long start, stop;
+		double time_solve;
 
 	/*create threads*/
 		int np = 1;
@@ -330,6 +332,7 @@ public abstract class Solver
 
 	/* SOLVER */
 		int it = 1;			/*start with one so we don't compute residue on first run*/
+		start = System.nanoTime();
 		while (it <= lin_max_it)
 		{
 			try
@@ -387,7 +390,9 @@ public abstract class Solver
 		{
 			Log.warning(" !! GS failed to converge in " + it + " iteration, norm = " + norm);
 		}
-
+		stop = System.nanoTime();
+		time_solve = (stop - start) / 1e9;
+		System.out.printf("timing: = %10.6f sec\n", time_solve);
 		executor.shutdown();
 		//cuda
 		//p.freeMemory();
@@ -416,8 +421,6 @@ public abstract class Solver
 		int l, x_l;
 		Pointer t;
 		Pointer xPtr;
-		ArrayList<String> tau_cuda;
-		ArrayList<Double> tau_niecuda;
 
 
 		ParLinearGS(int id, int i_min, int i_max,Matrix A, double x[], double b[])
@@ -446,18 +449,14 @@ public abstract class Solver
 			this.b=b;
 
 			//cuda
-			/*tau_cuda = new ArrayList<String>();
-			tau_niecuda = new ArrayList<Double>();
-
-
-			cooRowIndex = new Pointer();
+			/*cooRowIndex = new Pointer();
 			cooColIndex = new Pointer();
 			cooVal = new Pointer();
 			csrRowPtr = new Pointer();
 			t = new Pointer();
 			xPtr = new Pointer();
 
-			/*A_temp = new ArrayList<MatrixElement>();
+			A_temp = new ArrayList<MatrixElement>();
 			int r, c;
 			double val;
 			for(int i = 0; i < this.A.data.size(); i++){
@@ -537,32 +536,22 @@ public abstract class Solver
 		@Override
 		public String call() throws Exception
 		{
-			//cuda
 			for (int u=i_min;u<i_max;u++)
 			{
 		/*tau = [A-D]x */
 
 				double tau = A.multRowNonDiag(x, u);
-				//tau_niecuda.add("!!!!!!!!niecuda");
-				//tau_niecuda.add(tau);
 
 				double g = (b[u] - tau) / A.get(u,u);
 
 				x[u] = x[u] + 1.4*(g-x[u]); /*SOR*/
-				//Files.write(Paths.get("niecuda.txt"), tau_niecuda,
-				//StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-
 			}
 
-			/*for(int i = 0; i < x_l; i++){
-				System.out.println(i + ": " + tau_niecuda.get(i));
-			}*/
 			return null;
 		}
 
 		public String call_cuda() throws Exception
 		{
-			//cuda
 			double[] alfa = new double[1];
 			alfa[0] = 1;
 			/*double[] tmp = new double[4141];
@@ -577,28 +566,17 @@ public abstract class Solver
 					Pointer.to(alfa), descra, cooVal, csrRowPtr,
 					cooColIndex, xPtr, Pointer.to(new double[]{0.0f}), t);
 
-			//System.out.println(stat);
 			stat = cudaMemcpy(Pointer.to(tauHost), t, x_l*Sizeof.DOUBLE, cudaMemcpyDeviceToHost);
-			//System.out.println(stat);
-			//tau_cuda.add("-----------cuda");
-			/*for(int i = 0; i < x_l; i++){
-				System.out.println(i + ": " + tauHost[i]);
-			}*/
 
 			for (int u=i_min;u<i_max;u++)
 			{
 		/* tau = [A-D]x */
-		/*
-		double tau = A.multRowNonDiag(x, u);*/
 
 				double g = (b[u] - tauHost[u]) / A.get(u,u);
 
 				x[u] = x[u] + 1.4*(g-x[u]); /*SOR*/
 			}
-			cudaMemcpy(xPtr,		Pointer.to(x), 					x_l*Sizeof.DOUBLE, 	cudaMemcpyHostToDevice);
-
-			//Files.write(Paths.get("cuda.txt"), tau_cuda,
-			//StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+			cudaMemcpy(xPtr, Pointer.to(x),x_l*Sizeof.DOUBLE, cudaMemcpyHostToDevice);
 
 			return null;
 		}
@@ -642,11 +620,17 @@ public abstract class Solver
 		int[] pbuffer_size = {0};
 		cusparseHandle handle;
 		cusparseMatDescr descr_A, descr_L, descr_U;
-		int l;
+		int l, n;
 		for (MeshData md:mesh_data) {
 			if (md.L == null || md.U == null) {
 				//try {
 				//cuda
+				/*Matrix A_test = new Matrix(3);
+				A_test.set(0, 0, 1.0);
+				A_test.set(0, 1, 1.0);
+				A_test.set(1, 0, -1.0);
+				A_test.set(1, 1, 1.0);
+				A_test.set(2, 2, -0.5);*/
 				A_temp = new ArrayList<MatrixElement>();
 				int r, c;
 				double val;
@@ -655,15 +639,14 @@ public abstract class Solver
 						if (it != null) {
 							r = i;
 							c = it.getKey();
-							if (r != c) {
-								val = it.getValue();
-								MatrixElement el = new MatrixElement(r, c, val);
-								A_temp.add(el);
-							}
+							val = it.getValue();
+							MatrixElement el = new MatrixElement(r, c, val);
+							A_temp.add(el);
+
 						}
 					}
 				}
-
+				n = md.A.nr;
 				l = A_temp.size();
 
 				cooRowIndex = new Pointer();
@@ -703,21 +686,21 @@ public abstract class Solver
 				cusparseSetMatIndexBase(descr_A, CUSPARSE_INDEX_BASE_ZERO);
 
 				cusparseCreateMatDescr(descr_L);
-				cusparseSetMatIndexBase(descr_L, CUSPARSE_INDEX_BASE_ONE);
+				cusparseSetMatIndexBase(descr_L, CUSPARSE_INDEX_BASE_ZERO);
 				cusparseSetMatType(descr_L, CUSPARSE_MATRIX_TYPE_GENERAL);
 				cusparseSetMatFillMode(descr_L, CUSPARSE_FILL_MODE_LOWER);
 				cusparseSetMatDiagType(descr_L, CUSPARSE_DIAG_TYPE_UNIT);
 
 				cusparseCreateMatDescr(descr_U);
-				cusparseSetMatIndexBase(descr_U, CUSPARSE_INDEX_BASE_ONE);
+				cusparseSetMatIndexBase(descr_U, CUSPARSE_INDEX_BASE_ZERO);
 				cusparseSetMatType(descr_U, CUSPARSE_MATRIX_TYPE_GENERAL);
 				cusparseSetMatFillMode(descr_U, CUSPARSE_FILL_MODE_UPPER);
 				cusparseSetMatDiagType(descr_U, CUSPARSE_DIAG_TYPE_NON_UNIT);
 
 
 				//conversion coo to csr
-				cudaMalloc(csrRowPtr, (md.A.nr + 1) * Sizeof.INT);
-				cusparseXcoo2csr(handle, cooRowIndex, l, md.A.nr,
+				cudaMalloc(csrRowPtr, (n + 1) * Sizeof.INT);
+				cusparseXcoo2csr(handle, cooRowIndex, l, n,
 						csrRowPtr, CUSPARSE_INDEX_BASE_ZERO);
 
 				csrilu02Info info_A = new csrilu02Info();
@@ -731,46 +714,48 @@ public abstract class Solver
 				//buffer size
 
 				int status = cusparseDcsrilu02_bufferSize(
-						handle, md.A.nr, l, descr_A, cooVal, csrRowPtr, cooColIndex,
+						handle, n, l, descr_A, cooVal, csrRowPtr, cooColIndex,
 						info_A, pbuffer_A);
 				System.out.println("buffersize lu: " + status);
 				status = cusparseDcsrsv2_bufferSize(handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-						md.A.nr, l, descr_L, cooVal, csrRowPtr, cooColIndex, info_L,
+						n, l, descr_L, cooVal, csrRowPtr, cooColIndex, info_L,
 						pbuffer_L);
 				System.out.println("buffersize l: " + status);
 				status = cusparseDcsrsv2_bufferSize(handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-						md.A.nr, l, descr_U, cooVal, csrRowPtr, cooColIndex, info_U,
+						n, l, descr_U, cooVal, csrRowPtr, cooColIndex, info_U,
 						pbuffer_U);
 				System.out.println("buffersize u:"+ status);
 
 				pbuffer_size[0] = Math.max(pbuffer_A[0], Math.max(pbuffer_L[0], pbuffer_U[0]));
-				cudaMalloc(pbuffer, pbuffer_size[0]);
+				cudaMalloc(pbuffer, Sizeof.DOUBLE*pbuffer_size[0]);
 				System.out.println(pbuffer_size[0]);
 				//analysis
-				status = cusparseDcsrilu02_analysis(handle, md.A.nr, l, descr_A,
+				status = cusparseDcsrilu02_analysis(handle, n, l, descr_A,
 						cooVal, csrRowPtr, cooColIndex, info_A, CUSPARSE_SOLVE_POLICY_NO_LEVEL,
 						pbuffer);
+				System.out.println("status analysis lu: "+status);
 				status = cudaDeviceSynchronize();
-				System.out.println("1 b: "+status);
-				System.out.println("analysis lu: "+status);
-				status = cusparseDcsrsv2_analysis(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, md.A.nr,
+				System.out.println("1: "+status);
+				status = cusparseDcsrsv2_analysis(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, n,
 						l, descr_L, cooVal, csrRowPtr, cooColIndex, info_L, CUSPARSE_SOLVE_POLICY_NO_LEVEL,
 						pbuffer);
-				status = cudaDeviceSynchronize();
-				System.out.println("2 b: "+status);
 				System.out.println("analysis l: " + status);
+				status = cudaDeviceSynchronize();
+				System.out.println("2 : "+status);
 
-				status = cusparseDcsrsv2_analysis(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, md.A.nr,
+
+				status = cusparseDcsrsv2_analysis(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, n,
 						l, descr_U, cooVal, csrRowPtr, cooColIndex, info_U, CUSPARSE_SOLVE_POLICY_USE_LEVEL,
 						pbuffer);
-				status = cudaDeviceSynchronize();
-				System.out.println("3 b: "+status);
 				System.out.println("analysis u: "+status);
-				//solve A~LU
-				status = cusparseDcsrilu02(handle, md.A.nr, l, descr_A, cooVal, csrRowPtr, cooColIndex,
-						info_A, CUSPARSE_SOLVE_POLICY_NO_LEVEL, pbuffer);
 				status = cudaDeviceSynchronize();
-				System.out.println("solve b: "+status);
+				System.out.println("3: "+status);
+
+				//solve A~LU
+				status = cusparseDcsrilu02(handle,n, l, descr_A, cooVal, csrRowPtr, cooColIndex,
+						info_A, CUSPARSE_SOLVE_POLICY_NO_LEVEL, pbuffer);
+				System.out.println("status solve: "+status);
+				status = cudaDeviceSynchronize();
 				System.out.println("solve lu: "+status);
 
 				//Matrix ret[] = md.A.decomposeLU();
@@ -788,7 +773,13 @@ public abstract class Solver
 				//Matrix U = md.U;
 
 				//first solve Ly=b using forward subsitution
-				int n = md.A.nr;
+				//int n = md.A.nr;
+
+				/*double b[] = new double[n];
+				double x[] = new double[n];
+				b[0] = 1.0;
+				b[1] = 1.0;
+				b[2] = 1.0;*/
 			/*double y[] = new double[n];
 			y[0] = b[0] / L.get(0,0);
 			for (int i=1;i<n;i++)
@@ -823,23 +814,34 @@ public abstract class Solver
 				System.out.println("malloc x: "+status);
 
 				status = cudaDeviceSynchronize();
-				System.out.println("aaa b: "+status);
+				System.out.println("synchronize solve lu: "+status);
+				double[] temp_result = new double[l];
+				cudaMemcpy(Pointer.to(temp_result), cooVal, l, cudaMemcpyDeviceToHost);
+				System.out.println(temp_result);
 				status = cudaMemcpy(b_Ptr, Pointer.to(b), n * Sizeof.DOUBLE, cudaMemcpyHostToDevice);
 				System.out.println("memcpy b: "+status);
+				status = cudaDeviceSynchronize();
+				System.out.println("synchronize memcpy b: "+status);
 				//Ly = b
 				status = cusparseDcsrsv2_solve(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, n, l,
 						Pointer.to(new double[]{1.0f}), descr_L, cooVal, csrRowPtr, cooColIndex,
 						info_L, b_Ptr, y_Ptr, CUSPARSE_SOLVE_POLICY_NO_LEVEL, pbuffer);
 				System.out.println("solve ly = b : "+status);
+				status = cudaDeviceSynchronize();
+				System.out.println("synchronize ly=b: "+status);
+
 				//Ux=y
 				status = cusparseDcsrsv2_solve(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, n, l,
 						Pointer.to(new double[]{1.0f}), descr_U, cooVal, csrRowPtr, cooColIndex,
-						info_U, y_Ptr, b_Ptr, CUSPARSE_SOLVE_POLICY_USE_LEVEL, pbuffer);
+						info_U, y_Ptr, x_Ptr, CUSPARSE_SOLVE_POLICY_USE_LEVEL, pbuffer);
 				System.out.println("solve ux=y: "+status);
+				status = cudaDeviceSynchronize();
+				System.out.println("synchronize ux=y: "+status);
 
 				//copy result to x
 				status = cudaMemcpy(Pointer.to(x), x_Ptr, n*Sizeof.DOUBLE, cudaMemcpyDeviceToHost);
 				System.out.println("memcpy result" + status);
+				System.out.println("result" + x);
 				//free
 				cudaFree(pbuffer);
 				cusparseDestroyMatDescr(descr_A);
