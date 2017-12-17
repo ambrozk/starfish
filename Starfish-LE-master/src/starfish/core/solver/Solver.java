@@ -304,7 +304,7 @@ public abstract class Solver
 	/*create threads*/
 		int np = 1;
 		//cuda
-		//ParLinearGS p = null;
+		ParLinearGS p = null;
 
 		Collection<Callable<String>> workers = new ArrayList<Callable<String>>();
 		ExecutorService executor = Executors.newFixedThreadPool(1);
@@ -319,15 +319,15 @@ public abstract class Solver
 			int i_d = (int)((double)nu/np)+1;
 			int i_min=0;
 			//cuda
-			/*for (int i=0, id=0;i<np;i++,i_min+=i_d,id++)
+			for (int i=0, id=0;i<np;i++,i_min+=i_d,id++)
 				//workers.add(new ParLinearGS(id,i_min,i_min+i_d,A,x,b));
-				p = new ParLinearGS(id,i_min,i_min+i_d,A,x,b);*/
+				p = new ParLinearGS(id,i_min,i_min+i_d,A,x,b);
 
-			//nie cuda
+			/*
 			i_d = (int)((double)nu/np)+1;
 			i_min=0;
 			for (int i=0, id=0;i<np;i++,i_min+=i_d,id++)
-				workers.add(new ParLinearGS(id,i_min,i_min+i_d,A,x,b));
+				workers.add(new ParLinearGS(id,i_min,i_min+i_d,A,x,b));*/
 		}
 
 	/* SOLVER */
@@ -339,7 +339,7 @@ public abstract class Solver
 			{
 				executor.invokeAll(workers);
 				//cuda
-				//p.call();
+				p.call_cuda();
 			} catch (Exception ex)
 			{
 				Logger.getLogger(Solver.class.getName()).log(Level.SEVERE, null, ex);
@@ -393,9 +393,9 @@ public abstract class Solver
 		stop = System.nanoTime();
 		time_solve = (stop - start) / 1e9;
 		System.out.printf("timing: = %10.6f sec\n", time_solve);
-		executor.shutdown();
+		//executor.shutdown();
 		//cuda
-		//p.freeMemory();
+		p.freeMemory();
 		return it;
 	}
 
@@ -449,7 +449,7 @@ public abstract class Solver
 			this.b=b;
 
 			//cuda
-			/*cooRowIndex = new Pointer();
+			cooRowIndex = new Pointer();
 			cooColIndex = new Pointer();
 			cooVal = new Pointer();
 			csrRowPtr = new Pointer();
@@ -493,7 +493,7 @@ public abstract class Solver
 			cudaMalloc(cooColIndex, l*Sizeof.INT);
 			cudaMalloc(cooVal,      l*Sizeof.DOUBLE);
 			cudaMalloc(xPtr, 		x_l*Sizeof.DOUBLE);
-			cudaMalloc(t,			x_l*Sizeof.DOUBLE);*/
+			cudaMalloc(t,			x_l*Sizeof.DOUBLE);
 
 
 /*			for(int u = 0; u < 3; u++){
@@ -507,7 +507,7 @@ public abstract class Solver
 			cooRowIndexHostPtr[4] = 2; cooColIndexHostPtr[4] = 0; cooValHostPtr[4] = 2;
 			cooRowIndexHostPtr[5] = 2; cooColIndexHostPtr[5] = 1; cooValHostPtr[5] = 2;*/
 
-			/*cudaMemcpy(cooColIndex, Pointer.to(cooColIndexHostPtr), l*Sizeof.INT,          cudaMemcpyHostToDevice);
+			cudaMemcpy(cooColIndex, Pointer.to(cooColIndexHostPtr), l*Sizeof.INT,          cudaMemcpyHostToDevice);
 			cudaMemcpy(cooRowIndex, Pointer.to(cooRowIndexHostPtr), l*Sizeof.INT,          cudaMemcpyHostToDevice);
 			cudaMemcpy(cooVal,      Pointer.to(cooValHostPtr),      l*Sizeof.DOUBLE,        cudaMemcpyHostToDevice);
 			cudaMemcpy(xPtr,		Pointer.to(this.x), 					x_l*Sizeof.DOUBLE, 	cudaMemcpyHostToDevice);
@@ -518,7 +518,7 @@ public abstract class Solver
 			cusparseSetMatIndexBase(descra, CUSPARSE_INDEX_BASE_ZERO);
 			cudaMalloc(csrRowPtr, (this.A.nr+1)*Sizeof.INT);
 			cusparseXcoo2csr(handle, cooRowIndex, l, this.A.nr,
-					csrRowPtr, CUSPARSE_INDEX_BASE_ZERO);*/
+					csrRowPtr, CUSPARSE_INDEX_BASE_ZERO);
 
 			/*int stat = cusparseDcsrmv(
 					handle, CUSPARSE_OPERATION_NON_TRANSPOSE, A.nr, A.nr, l,
