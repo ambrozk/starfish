@@ -6,10 +6,12 @@
  * *****************************************************/
 package starfish.core.solver;
 
+import jcuda.jcusolver.cusolverDnHandle;
 import jcuda.jcusparse.csrilu02Info;
 import jcuda.jcusparse.csrsv2Info;
 import jcuda.jcusparse.cusparseHandle;
 import jcuda.jcusparse.cusparseMatDescr;
+import jcuda.runtime.cudaStream_t;
 import starfish.core.common.Vector;
 
 import java.io.FileNotFoundException;
@@ -36,6 +38,8 @@ import starfish.core.domain.Mesh.NodeType;
 //cuda
 import jcuda.*;
 
+import static jcuda.jcublas.cublasOperation.CUBLAS_OP_N;
+import static jcuda.jcusolver.JCusolverDn.*;
 import static jcuda.jcusparse.JCusparse.*;
 import static jcuda.jcusparse.cusparseDiagType.CUSPARSE_DIAG_TYPE_NON_UNIT;
 import static jcuda.jcusparse.cusparseDiagType.CUSPARSE_DIAG_TYPE_UNIT;
@@ -606,6 +610,7 @@ public abstract class Solver
 	protected int solveLU(MeshData mesh_data[])
 	{
 		ArrayList<MatrixElement> A_temp;
+		double[] denseA;
 		int cooRowIndexHostPtr[];
 		int cooColIndexHostPtr[];
 		double cooValHostPtr[];
@@ -613,13 +618,14 @@ public abstract class Solver
 		Pointer cooColIndex;
 		Pointer cooVal;
 		Pointer csrRowPtr;
-		Pointer pbuffer;
-		int[] pbuffer_A = {0};
-		int[] pbuffer_L = {0};
-		int[] pbuffer_U = {0};
-		int[] pbuffer_size = {0};
+		Pointer d_denseA;
+		cudaStream_t stream;
 		cusparseHandle handle;
+		cusolverDnHandle handle_solver;
 		cusparseMatDescr descr_A, descr_L, descr_U;
+		long start, stop;
+		double time_solve;
+
 		int l, n;
 		for (MeshData md:mesh_data) {
 			if (md.L == null || md.U == null) {
@@ -649,18 +655,28 @@ public abstract class Solver
 				n = md.A.nr;
 				l = A_temp.size();
 
+				denseA = new double[n*n];
 				cooRowIndex = new Pointer();
 				cooColIndex = new Pointer();
 				cooVal = new Pointer();
 				csrRowPtr = new Pointer();
-				pbuffer = new Pointer();
+				d_denseA = new Pointer();
 				handle = new cusparseHandle();
+				handle_solver = new cusolverDnHandle();
 				descr_A = new cusparseMatDescr();
-				descr_L = new cusparseMatDescr();
-				descr_U = new cusparseMatDescr();
+				stream = new cudaStream_t();
 				cooRowIndexHostPtr = new int[l];
 				cooColIndexHostPtr = new int[l];
 				cooValHostPtr = new double[l];
+
+				Pointer A = new Pointer();
+				int bufferSize[] = { 0 };
+				Pointer info = new Pointer();
+				Pointer buffer = new Pointer();
+				Pointer ipiv = new Pointer(); // pivoting sequence
+				int h_info[] = { 0 };
+				Pointer d_x = new Pointer(); // x = A \ b
+				Pointer d_b = new Pointer(); // a copy of h_b
 
 				for (int i = 0; i < l; i++) {
 					cooRowIndexHostPtr[i] = A_temp.get(i).row;
@@ -672,6 +688,7 @@ public abstract class Solver
 				System.out.println("malloc row: "+statusm);
 				cudaMalloc(cooColIndex, l * Sizeof.INT);
 				cudaMalloc(cooVal, l * Sizeof.DOUBLE);
+				cudaMalloc(d_denseA, n*n*Sizeof.DOUBLE);
 
 				statusm = cudaMemcpy(cooColIndex, Pointer.to(cooColIndexHostPtr), l * Sizeof.INT, cudaMemcpyHostToDevice);
 				System.out.println("memcpy col: "+statusm);
@@ -680,83 +697,48 @@ public abstract class Solver
 
 				//create handle
 				cusparseCreate(handle);
-				//set matrix descriptions
+				cusolverDnCreate(handle_solver);
+
+				//Matrix A description
 				cusparseCreateMatDescr(descr_A);
 				cusparseSetMatType(descr_A, CUSPARSE_MATRIX_TYPE_GENERAL);
 				cusparseSetMatIndexBase(descr_A, CUSPARSE_INDEX_BASE_ZERO);
 
-				cusparseCreateMatDescr(descr_L);
-				cusparseSetMatIndexBase(descr_L, CUSPARSE_INDEX_BASE_ZERO);
-				cusparseSetMatType(descr_L, CUSPARSE_MATRIX_TYPE_GENERAL);
-				cusparseSetMatFillMode(descr_L, CUSPARSE_FILL_MODE_LOWER);
-				cusparseSetMatDiagType(descr_L, CUSPARSE_DIAG_TYPE_UNIT);
-
-				cusparseCreateMatDescr(descr_U);
-				cusparseSetMatIndexBase(descr_U, CUSPARSE_INDEX_BASE_ZERO);
-				cusparseSetMatType(descr_U, CUSPARSE_MATRIX_TYPE_GENERAL);
-				cusparseSetMatFillMode(descr_U, CUSPARSE_FILL_MODE_UPPER);
-				cusparseSetMatDiagType(descr_U, CUSPARSE_DIAG_TYPE_NON_UNIT);
-
+				//create stream
+				cudaStreamCreate(stream);
 
 				//conversion coo to csr
 				cudaMalloc(csrRowPtr, (n + 1) * Sizeof.INT);
-				cusparseXcoo2csr(handle, cooRowIndex, l, n,
+				statusm = cusparseXcoo2csr(handle, cooRowIndex, l, n,
 						csrRowPtr, CUSPARSE_INDEX_BASE_ZERO);
+				System.out.println("coo to csr: "+statusm);
 
-				csrilu02Info info_A = new csrilu02Info();
-				csrsv2Info info_L = new csrsv2Info();
-				csrsv2Info info_U = new csrsv2Info();
+				//conversion csr to dense
+				statusm = cusparseDcsr2dense(handle, n, n, descr_A, cooVal, csrRowPtr,
+						cooColIndex, d_denseA, n);
+				System.out.println("csr to dense: "+statusm);
 
-				cusparseCreateCsrilu02Info(info_A);
-				cusparseCreateCsrsv2Info(info_L);
-				cusparseCreateCsrsv2Info(info_U);
+				//test memcpy
+				/*statusm = cudaMemcpy(Pointer.to(denseA), d_denseA, n*n*Sizeof.DOUBLE, cudaMemcpyDeviceToHost);
+				System.out.println("csr to dense: "+statusm);*/
 
-				//buffer size
+				// get buffersize
+				cusolverDnDgetrf_bufferSize(handle_solver, n, n, d_denseA, n, bufferSize);
 
-				int status = cusparseDcsrilu02_bufferSize(
-						handle, n, l, descr_A, cooVal, csrRowPtr, cooColIndex,
-						info_A, pbuffer_A);
-				System.out.println("buffersize lu: " + status);
-				status = cusparseDcsrsv2_bufferSize(handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-						n, l, descr_L, cooVal, csrRowPtr, cooColIndex, info_L,
-						pbuffer_L);
-				System.out.println("buffersize l: " + status);
-				status = cusparseDcsrsv2_bufferSize(handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-						n, l, descr_U, cooVal, csrRowPtr, cooColIndex, info_U,
-						pbuffer_U);
-				System.out.println("buffersize u:"+ status);
+				cudaMalloc(info, Sizeof.INT);
+				cudaMalloc(buffer, Sizeof.DOUBLE*bufferSize[0]);
+				cudaMalloc(A, Sizeof.DOUBLE*n*n);
+				cudaMalloc(ipiv, Sizeof.INT*n);
 
-				pbuffer_size[0] = Math.max(pbuffer_A[0], Math.max(pbuffer_L[0], pbuffer_U[0]));
-				cudaMalloc(pbuffer, Sizeof.DOUBLE*pbuffer_size[0]);
-				System.out.println(pbuffer_size[0]);
-				//analysis
-				status = cusparseDcsrilu02_analysis(handle, n, l, descr_A,
-						cooVal, csrRowPtr, cooColIndex, info_A, CUSPARSE_SOLVE_POLICY_NO_LEVEL,
-						pbuffer);
-				System.out.println("status analysis lu: "+status);
-				status = cudaDeviceSynchronize();
-				System.out.println("1: "+status);
-				status = cusparseDcsrsv2_analysis(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, n,
-						l, descr_L, cooVal, csrRowPtr, cooColIndex, info_L, CUSPARSE_SOLVE_POLICY_NO_LEVEL,
-						pbuffer);
-				System.out.println("analysis l: " + status);
-				status = cudaDeviceSynchronize();
-				System.out.println("2 : "+status);
-
-
-				status = cusparseDcsrsv2_analysis(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, n,
-						l, descr_U, cooVal, csrRowPtr, cooColIndex, info_U, CUSPARSE_SOLVE_POLICY_USE_LEVEL,
-						pbuffer);
-				System.out.println("analysis u: "+status);
-				status = cudaDeviceSynchronize();
-				System.out.println("3: "+status);
-
-				//solve A~LU
-				status = cusparseDcsrilu02(handle,n, l, descr_A, cooVal, csrRowPtr, cooColIndex,
-						info_A, CUSPARSE_SOLVE_POLICY_NO_LEVEL, pbuffer);
-				System.out.println("status solve: "+status);
-				status = cudaDeviceSynchronize();
-				System.out.println("solve lu: "+status);
+				//prepare copy of A
+				cudaMemcpy(A, d_denseA, Sizeof.DOUBLE*n*n, cudaMemcpyDeviceToDevice);
+				start = System.nanoTime();
+				//A=LU
+				cusolverDnDgetrf(handle_solver, n, n, A, n, buffer, ipiv, info);
+				cudaMemcpy(Pointer.to(h_info), info, Sizeof.INT, cudaMemcpyDeviceToHost);
+				if ( 0 != h_info[0] ){
+					System.err.printf("Error: LU factorization failed\n");
+				}
 
 				//Matrix ret[] = md.A.decomposeLU();
 				//md.L = ret[0]; md.U = ret[1];
@@ -778,8 +760,44 @@ public abstract class Solver
 				/*double b[] = new double[n];
 				double x[] = new double[n];
 				b[0] = 1.0;
-				b[1] = 1.0;
-				b[2] = 1.0;*/
+				b[1] = 2.0;
+				b[2] = 4.0;*/
+
+				//malloc device b and x
+				statusm = cudaMalloc(d_x, Sizeof.DOUBLE*n);
+				System.out.println("malloc device x: "+statusm);
+				statusm = cudaMalloc(d_b, Sizeof.DOUBLE*n);
+				System.out.println("malloc device b: "+statusm);
+				statusm = cudaMemcpy(d_b, Pointer.to(b), Sizeof.DOUBLE*n, cudaMemcpyHostToDevice);
+				System.out.println("memcpy b: "+statusm);
+
+				//ax =b
+				cudaMemcpy(d_x, d_b, Sizeof.DOUBLE*n, cudaMemcpyDeviceToDevice);
+				cusolverDnDgetrs(handle_solver, CUBLAS_OP_N, n, 1, A, n, ipiv, d_x, n, info);
+				cudaDeviceSynchronize();
+
+				stop = System.nanoTime();
+				time_solve = (stop - start) / 1e9;
+				System.out.printf("timing: LU = %10.6f sec\n", time_solve);
+
+				//memcpy x
+				statusm = cudaMemcpy(Pointer.to(x), d_x, Sizeof.DOUBLE*n,
+						cudaMemcpyDeviceToHost);
+				System.out.println("memcpy result: "+statusm);
+
+				//free
+				cudaFree(info);
+				cudaFree(buffer);
+				cudaFree(A);
+				cudaFree(ipiv);
+
+				cusolverDnDestroy(handle_solver);
+				cusparseDestroy(handle);
+				cudaStreamDestroy(stream);
+
+				cudaFree(d_denseA);
+				cudaFree(d_x);
+				cudaFree(d_b);
 			/*double y[] = new double[n];
 			y[0] = b[0] / L.get(0,0);
 			for (int i=1;i<n;i++)
@@ -801,56 +819,6 @@ public abstract class Solver
 			}*/
 
 				double y[] = new double[n];
-
-				Pointer y_Ptr = new Pointer();
-				Pointer b_Ptr = new Pointer();
-				Pointer x_Ptr = new Pointer();
-
-				status = cudaMalloc(b_Ptr, n*Sizeof.DOUBLE);
-				System.out.println("malloc b: "+status);
-				status = cudaMalloc(y_Ptr, n*Sizeof.DOUBLE);
-				System.out.println("malloc y: "+status);
-				status=cudaMalloc(x_Ptr, n*Sizeof.DOUBLE);
-				System.out.println("malloc x: "+status);
-
-				status = cudaDeviceSynchronize();
-				System.out.println("synchronize solve lu: "+status);
-				double[] temp_result = new double[l];
-				cudaMemcpy(Pointer.to(temp_result), cooVal, l, cudaMemcpyDeviceToHost);
-				System.out.println(temp_result);
-				status = cudaMemcpy(b_Ptr, Pointer.to(b), n * Sizeof.DOUBLE, cudaMemcpyHostToDevice);
-				System.out.println("memcpy b: "+status);
-				status = cudaDeviceSynchronize();
-				System.out.println("synchronize memcpy b: "+status);
-				//Ly = b
-				status = cusparseDcsrsv2_solve(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, n, l,
-						Pointer.to(new double[]{1.0f}), descr_L, cooVal, csrRowPtr, cooColIndex,
-						info_L, b_Ptr, y_Ptr, CUSPARSE_SOLVE_POLICY_NO_LEVEL, pbuffer);
-				System.out.println("solve ly = b : "+status);
-				status = cudaDeviceSynchronize();
-				System.out.println("synchronize ly=b: "+status);
-
-				//Ux=y
-				status = cusparseDcsrsv2_solve(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, n, l,
-						Pointer.to(new double[]{1.0f}), descr_U, cooVal, csrRowPtr, cooColIndex,
-						info_U, y_Ptr, x_Ptr, CUSPARSE_SOLVE_POLICY_USE_LEVEL, pbuffer);
-				System.out.println("solve ux=y: "+status);
-				status = cudaDeviceSynchronize();
-				System.out.println("synchronize ux=y: "+status);
-
-				//copy result to x
-				status = cudaMemcpy(Pointer.to(x), x_Ptr, n*Sizeof.DOUBLE, cudaMemcpyDeviceToHost);
-				System.out.println("memcpy result" + status);
-				System.out.println("result" + x);
-				//free
-				cudaFree(pbuffer);
-				cusparseDestroyMatDescr(descr_A);
-				cusparseDestroyMatDescr(descr_L);
-				cusparseDestroyMatDescr(descr_U);
-				cusparseDestroyCsrilu02Info(info_A);
-				cusparseDestroyCsrsv2Info(info_L);
-				cusparseDestroyCsrsv2Info(info_U);
-				cusparseDestroy(handle);
 
 			}
 		}

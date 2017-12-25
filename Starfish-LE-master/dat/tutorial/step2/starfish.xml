@@ -20,7 +20,8 @@
 <nl_max_it>25</nl_max_it>
 <tol>1e-4</tol>
 <nl_tol>1e-3</nl_tol>
-<linear>false</linear>
+<linear>true</linear>
+<method>DIRECT</method>
 </solver>
 
 <!-- set sources -->
