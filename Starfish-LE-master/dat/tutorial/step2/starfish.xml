@@ -7,11 +7,12 @@
 <load>boundaries.xml</load>
 
 <!-- set potential solver -->
-<!--
+
 <solver type="constant-ef">
 <comps>0,-500</comps>
 </solver>
--->
+
+<!--
 <solver type="poisson">
 <n0>1e12</n0>
 <Te0>1.5</Te0>
@@ -23,7 +24,7 @@
 <linear>true</linear>
 <method>DIRECT</method>
 </solver>
-
+-->
 <!-- set sources -->
 <sources>
 <boundary_source name="space">

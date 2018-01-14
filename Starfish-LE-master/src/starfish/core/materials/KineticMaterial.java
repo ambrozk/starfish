@@ -14,6 +14,10 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.Set;
+
+import jcuda.Pointer;
+import jcuda.Sizeof;
+import jcuda.driver.*;
 import org.w3c.dom.Element;
 import starfish.core.boundaries.Boundary;
 import starfish.core.boundaries.Segment;
@@ -31,6 +35,8 @@ import starfish.core.domain.UniformMesh;
 import starfish.core.io.InputParser;
 import starfish.core.materials.MaterialsModule.MaterialParser;
 import starfish.core.common.Vector;
+
+import static jcuda.driver.JCudaDriver.*;
 
 /** definition of particle-based material*/
 public class KineticMaterial extends Material
@@ -162,18 +168,254 @@ public class KineticMaterial extends Material
 
     /*updates field on a single mesh*/
     void moveParticles(MeshData md, boolean particle_transfer)
-    {	
-	for (int block=0;block<md.particle_block.length;block++)
+    {
+    	//jcuda test
+		int[] a = new int[3];
+		a[0] = 1;
+		a[1] = 2;
+		a[2] = 3;
+		int[] b = new int[3];
+		b[0] = 1;
+		b[1] = 2;
+		b[2] = 3;
+		int[] sum = new int[3];
+		JCudaDriver.setExceptionsEnabled(true);
+		// Initialize the driver and create a context for the first device.
+		cuInit(0);
+		CUdevice device = new CUdevice();
+		cuDeviceGet(device, 0);
+		CUcontext context = new CUcontext();
+		cuCtxCreate(context, 0, device);
+
+		CUdeviceptr aPtr = new CUdeviceptr();
+		int stat = cuMemAlloc(aPtr, 3*Sizeof.INT);
+		System.out.println(stat);
+		stat = cuMemcpyHtoD(aPtr, Pointer.to(a), Sizeof.INT*3);
+		System.out.println(stat);
+
+		CUdeviceptr bPtr = new CUdeviceptr();
+		cuMemAlloc(bPtr, Sizeof.INT*3);
+		cuMemcpyHtoD(bPtr, Pointer.to(b), Sizeof.INT*3);
+
+		CUdeviceptr sumPtr = new CUdeviceptr();
+		cuMemAlloc(sumPtr, Sizeof.INT*3);
+
+		CUmodule module = new CUmodule();
+		stat = cuModuleLoad(module, "pushParticleKernel.ptx");
+
+// Obtain a function pointer to the kernel function.
+		CUfunction function = new CUfunction();
+		cuModuleGetFunction(function, module, "add");
+
+		Pointer kernelParameters = Pointer.to(
+				Pointer.to(new int[]{3}),
+				Pointer.to(aPtr),
+				Pointer.to(bPtr),
+				Pointer.to(sumPtr)
+		);
+
+// Call the kernel function.
+		int blockSizeX = 256;
+		int gridSizeX = (int)Math.ceil((double)3 / blockSizeX);
+		stat = cuLaunchKernel(function,
+				gridSizeX,  1, 1,      // Grid dimension
+				blockSizeX, 1, 1,      // Block dimension
+				0, null,               // Shared memory size and stream
+				kernelParameters, null // Kernel- and extra parameters
+		);
+		System.out.println(stat);
+		stat = cuCtxSynchronize();
+		System.out.println(stat);
+
+		stat = cuMemcpyDtoH(Pointer.to(sum), sumPtr, Sizeof.INT * 3);
+
+		System.out.println(stat);
+		ArrayList<Particle> particles;
+		int size;
+
+		final int max_bounces = 10;		/*maximum number of surface bounces per step*/
+		double old[] = new double[2];	/*old physical coordinate*/
+		double old_lc[] = new double[2]; /*old logical coordinate*/
+		double ef[] = new double[3];
+		double bf[] = new double[3];
+
+		Mesh mesh = md.mesh;
+		Field2D Den = getDen(mesh);
+		Field2D U = getU(mesh);
+		Field2D V = getV(mesh);
+		Field2D W = getW(mesh);
+
+		Field2D Efi = md.Efi;
+		Field2D Efj = md.Efj;
+
+		Field2D Bfi = md.Bfi;
+		Field2D Bfj = md.Bfj;
+
+		if(!particle_transfer) {
+			size = md.all_particles.size();
+		}
+		else {
+			size = md.all_transfered_particles.size();
+		}
+
+		for(int i = 0; i < size; i++)
+		{
+			Particle part;
+			if(!particle_transfer)
+				part = md.all_particles.get(i);
+			else
+				part = md.all_transfered_particles.get(i);
+			if(part.alive == 0) {
+		/*increment particle time*/
+				if (!particle_transfer) {
+					part.dt += Starfish.getDt();
+				}
+
+	    /*update velocity*/
+				ef[0] = Efi.gather(part.lc);
+				ef[1] = Efj.gather(part.lc);
+
+	    /*update velocity*/
+				bf[0] = Bfi.gather(part.lc);
+				bf[1] = Bfj.gather(part.lc);
+
+	    /*update velocity*/
+				if (bf[0] == 0 && bf[1] == 0) {
+					part.vel[0] += q_over_m * ef[0] * part.dt;
+					part.vel[1] += q_over_m * ef[1] * part.dt;
+				} else {
+					UpdateVelocityBoris(part, ef, bf);
+				}
+
+				int bounces = 0;
+				boolean alive = true;
+
+	    /*iterate while we have time remaining*/
+				while (part.dt > 0 && bounces++ < max_bounces) {
+		/*save old position*/
+					old[0] = part.pos[0];
+					old[1] = part.pos[1];
+
+					old_lc[0] = part.lc[0];
+					old_lc[1] = part.lc[1];
+
+		/*update position*/
+					part.pos[0] += part.vel[0] * part.dt;
+					part.pos[1] += part.vel[1] * part.dt;
+
+					if (Starfish.getDomainType() == DomainType.RZ) {
+						rotateToRZ(part);
+					} else if (Starfish.getDomainType() == DomainType.ZR) {
+						rotateToZR(part);
+					} else
+						part.pos[2] += part.vel[2] * part.dt;
+
+					part.lc = mesh.XtoL(part.pos);
+
+					Particle part_old = new Particle(part);
+
+		/*check if particle hit anything or left the domain*/
+					alive = ProcessBoundary(part, mesh, old, old_lc);
+
+					if (alive && part.lc[0] > mesh.ni || part.lc[1] > mesh.nj) {
+						part = part_old;
+						alive = ProcessBoundary(part, mesh, old, old_lc);
+
+					}
+					if (!alive) {
+						part = new Particle(part_old);
+
+						//  if (part.lc[1]<1)
+						alive = ProcessBoundary(part_old, mesh, old, old_lc);
+						//iterator.remove();
+						if (particle_transfer)
+							md.all_transfered_particles.get(i).alive = 1;
+						else
+							md.all_particles.get(i).alive = 1;
+						break;
+					}
+
+		/*are we tracing this particle, if so output trace*/
+					if (part.trace_id >= 0)
+						Starfish.particle_trace_module.addTrace(part);
+				} /*dt*/
+
+	    /*TODO: bottleneck since only one thread can access at once*/
+	    /*scatter data*/
+				if (alive) {
+					synchronized (this) {
+
+						Den.scatter(part.lc, part.spwt);
+						U.scatter(part.lc, part.vel[0] * part.spwt);
+						V.scatter(part.lc, part.vel[1] * part.spwt);
+						W.scatter(part.lc, part.vel[2] * part.spwt);
+
+		/*also add to the main list if transfer*/
+						if (particle_transfer) {
+							md.addParticle(part);
+							//iterator.remove();
+							md.all_transfered_particles.get(i).alive = 1;
+						}
+
+		/*save momentum for diagnostics, will be multiplied by mass in updatefields*/
+						total_momentum += part.spwt * Vector.mag2(part.vel);
+					}
+				}
+			}
+		}	/*end of particle loop*/
+	/*for (int block=0;block<md.particle_block.length;block++)
 	{
 	    Iterator<Particle> iterator;
 	    
 	    if (!particle_transfer) iterator=md.getIterator(block);
 	    else iterator=md.getTransferIterator(block);
 	    
-	    ParticleMover mover = new ParticleMover(md,iterator,particle_transfer,"PartMover"+block);  
+	    ParticleMover mover = new ParticleMover(md,iterator,particle_transfer,"PartMover"+block);
 	    mover.run();
-	}	
+	}*/
     }
+
+	private void rotateToRZ(Particle part)
+	{
+	    /*movement in R plane*/
+		double A = part.vel[2]*part.dt;
+		double B = part.pos[0];		/*new position in R plane*/
+		double R = Math.sqrt(A*A + B*B);	/*new radius*/
+
+		double cos = B/R;
+		double sin = A/R;
+
+	    /*update particle theta, only used for visualization*/
+		part.pos[2] += Math.asin(sin);
+
+	    /*rotate velocity through theta*/
+		double v1 = part.vel[0];
+		double v2 = part.vel[2];
+		part.pos[0] = R;
+		part.vel[0] = cos*v1+sin*v2;
+		part.vel[2] = -sin*v1+cos*v2;
+	}
+
+	private void rotateToZR(Particle part)
+	{
+	    /*movement in R plane*/
+		double A = part.vel[2]*part.dt;
+		double B = part.pos[1];
+		double R = Math.sqrt(A*A + B*B);		/*new radius*/
+
+		double cos = B/R;
+		double sin = A/R;
+
+	    /*update particle theta, only used for visualization*/
+		part.pos[2] += Math.asin(sin);
+
+	    /*rotate velocity through theta*/
+		double v1 = part.vel[1];
+		double v2 = part.vel[2];
+		part.pos[1] = R;
+		part.vel[1] = cos*v1 + sin*v2;
+		part.vel[2] = -sin*v1 + cos*v2;
+	}
 
     /*returns a particle iterator that iterates over all blocks*/
     public Iterator<Particle> getIterator(Mesh mesh)
@@ -198,7 +440,7 @@ public class KineticMaterial extends Material
 	    this.iterator = iterator;
 	    this.particle_transfer=particle_transfer;
 	}
-	
+
 	@Override
 	public void run()
 	{
@@ -247,7 +489,7 @@ public class KineticMaterial extends Material
 	    {
 		UpdateVelocityBoris(part, ef, bf);
 	    }
-	    
+
 	    int bounces = 0;
 	    boolean alive = true;
 
@@ -257,14 +499,14 @@ public class KineticMaterial extends Material
 		/*save old position*/
 		old[0] = part.pos[0];
 		old[1] = part.pos[1];
-		    
+
 		old_lc[0] = part.lc[0];
 		old_lc[1] = part.lc[1];
 
 		/*update position*/
 		part.pos[0] += part.vel[0] * part.dt;
 		part.pos[1] += part.vel[1] * part.dt;
-				
+
 		if (Starfish.getDomainType()==DomainType.RZ)
 		{
 		    rotateToRZ(part);
@@ -272,17 +514,17 @@ public class KineticMaterial extends Material
 		else if (Starfish.getDomainType()==DomainType.ZR)
 		{
 		    rotateToZR(part);
-		}		
+		}
 		else
 		    part.pos[2] += part.vel[2]*part.dt;
-		
+
 		part.lc = mesh.XtoL(part.pos);
-		
+
 		Particle part_old = new Particle(part);
-		
-		/*check if particle hit anything or left the domain*/		
+
+		/*check if particle hit anything or left the domain*/
 		alive = ProcessBoundary(part, mesh, old, old_lc);
-	
+
 		if (alive && part.lc[0]>mesh.ni || part.lc[1]>mesh.nj)
 		{
 		    part = part_old;
@@ -292,24 +534,28 @@ public class KineticMaterial extends Material
 		if (!alive)
 		{
 		    part = new Particle(part_old);
-		
+
 		  //  if (part.lc[1]<1)
 			alive = ProcessBoundary(part_old, mesh, old, old_lc);
+			if(!particle_transfer)
+				md.all_particles.remove(part_old);
+			else
+				md.all_transfered_particles.remove(part_old);
 		    iterator.remove();
 		    break;
-		}				
-				
+		}
+
 		/*are we tracing this particle, if so output trace*/
 		if (part.trace_id>=0)
-		    Starfish.particle_trace_module.addTrace(part);	
+		    Starfish.particle_trace_module.addTrace(part);
 	    } /*dt*/
-	    
+
 	    /*TODO: bottleneck since only one thread can access at once*/
 	    /*scatter data*/
 	    if (alive)
-	    {		
+	    {
 		synchronized(this){
-		    		
+
 		Den.scatter(part.lc, part.spwt);
 		U.scatter(part.lc, part.vel[0] * part.spwt);
 		V.scatter(part.lc, part.vel[1] * part.spwt);
@@ -319,6 +565,7 @@ public class KineticMaterial extends Material
 		if (particle_transfer)
 		{
 		    md.addParticle(part);
+			md.all_transfered_particles.remove(part);
 		    iterator.remove();
 		}
 
@@ -675,6 +922,7 @@ public class KineticMaterial extends Material
 	part.trace_id = Starfish.particle_trace_module.getTraceId(part.id);
 	
 	md.addParticle(part);
+
 	return true;
     }
 
@@ -875,6 +1123,7 @@ public class KineticMaterial extends Material
     static public class Particle
     {
 
+    	public int alive;
 	public double pos[];
 	public double vel[];
 	public double spwt;
@@ -891,7 +1140,8 @@ public class KineticMaterial extends Material
 
 	/** copy constructor*/
 	public Particle (Particle part) 
-	{   
+	{
+		alive = 0;
 	    pos = new double[3];
 	    vel = new double[3];
 	    lc = new double[2];
@@ -970,11 +1220,15 @@ public class KineticMaterial extends Material
 	    Efj = Starfish.domain_module.getEfj(mesh);
 	    Bfi = Starfish.domain_module.getBfi(mesh);
 	    Bfj = Starfish.domain_module.getBfj(mesh);
-	    
-	    num_blocks = Starfish.getNumProcessors();
+
+	    num_blocks = 1;
+	    //num_blocks = Starfish.getNumProcessors();
 	    
 	    particle_block = new ParticleBlock[num_blocks];
 	    transfer_block = new ParticleBlock[num_blocks];
+
+	    all_particles = new ArrayList<>();
+	    all_transfered_particles = new ArrayList<>();
 	    
 	    /*init particle lists*/
 	    for (int i=0;i<particle_block.length;i++)
@@ -988,6 +1242,8 @@ public class KineticMaterial extends Material
 	Mesh mesh;
 	Field2D Efi, Efj;
 	Field2D Bfi, Bfj;
+	ArrayList<Particle> all_particles;
+	ArrayList<Particle> all_transfered_particles;
 	
 	ParticleBlock particle_block[];
 	ParticleBlock transfer_block[];	/*particles transferred into this mesh from a neighboring one during the transfer*/
@@ -1003,11 +1259,13 @@ public class KineticMaterial extends Material
 		if (particle_block[i].particle_list.size()<min_count) {min_count=particle_block[i].particle_list.size();block=i;}
 	    
 	    particle_block[block].particle_list.add(part);
+		all_particles.add(part);
 	}
 	
 	/**add particle to the transfers list, attempting to keep block sizes equal*/
 	void addTransferParticle(Particle part)
 	{
+		this.all_transfered_particles.add(part);
 	    /*find particle block with fewest particles*/
 	    int block=0;
 	    int min_count=transfer_block[block].particle_list.size();

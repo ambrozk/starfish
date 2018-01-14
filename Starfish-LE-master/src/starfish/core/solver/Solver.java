@@ -607,6 +607,79 @@ public abstract class Solver
 		throw new UnsupportedOperationException("Not yet implemented");
 	}
 
+	protected int solveLU1(MeshData mesh_data[])
+	{
+		ArrayList<MatrixElement> A_temp;
+		int cooRowIndexHostPtr[];
+		int cooColIndexHostPtr[];
+		double cooValHostPtr[];
+		Pointer cooRowIndex;
+		Pointer cooColIndex;
+		Pointer cooVal;
+		Pointer csrRowPtr;
+		Pointer pbuffer;
+		int[] pbuffer_A = {0};
+		int[] pbuffer_L = {0};
+		int[] pbuffer_U = {0};
+		int[] pbuffer_size = {0};
+		double x_test[] = null;
+		cusparseHandle handle;
+		cusparseMatDescr descr_A, descr_L, descr_U;
+		int l;
+		long start, stop;
+		double time_solve;
+		start =0;
+		for (MeshData md:mesh_data) {
+			if (md.L == null || md.U == null) {
+				try {
+					//cuda
+
+					start = System.nanoTime();
+					Matrix ret[] = md.A.decomposeLU();
+					md.L = ret[0];
+					md.U = ret[1];
+				} catch (UnsupportedOperationException e) {
+					Log.error("LU decomposition failed");
+				}
+
+			}
+			double b[] = md.b;
+			 x_test = new double[md.A.nr];
+			Matrix L = md.L;
+			Matrix U = md.U;
+
+			//first solve Ly=b using forward subsitution
+			int n = md.A.nr;
+			double y[] = new double[n];
+			y[0] = b[0] / L.get(0,0);
+			for (int i=1;i<n;i++)
+			{
+				double s = b[i];
+				for (int j=0;j<i;j++)
+					s -= L.get(i,j) * y[j];
+				y[i] = s/L.get(i, i);
+			}
+
+			//now solve Ux=y
+			x_test[n-1] = y[n-1]/U.get(n-1,n-1);
+			for (int i=n-2;i>=0;i--)
+			{
+				double s = y[i];
+				for (int j=i+1;j<n;j++)
+					s -= U.get(i,j) * x_test[j];
+				x_test[i] = s/U.get(i,i);
+			}
+
+			stop = System.nanoTime();
+			time_solve = (stop - start) / 1e9;
+			System.out.printf("timing: LU = %10.6f sec\n", time_solve);
+
+
+		}
+
+		return 0;
+	}
+
 	protected int solveLU(MeshData mesh_data[])
 	{
 		ArrayList<MatrixElement> A_temp;
@@ -674,6 +747,7 @@ public abstract class Solver
 				Pointer info = new Pointer();
 				Pointer buffer = new Pointer();
 				Pointer ipiv = new Pointer(); // pivoting sequence
+				int[] h_piv = new int[n];
 				int h_info[] = { 0 };
 				Pointer d_x = new Pointer(); // x = A \ b
 				Pointer d_b = new Pointer(); // a copy of h_b
@@ -774,7 +848,9 @@ public abstract class Solver
 				//ax =b
 				cudaMemcpy(d_x, d_b, Sizeof.DOUBLE*n, cudaMemcpyDeviceToDevice);
 				cusolverDnDgetrs(handle_solver, CUBLAS_OP_N, n, 1, A, n, ipiv, d_x, n, info);
-				cudaDeviceSynchronize();
+				 statusm = cudaDeviceSynchronize();
+				System.out.println("synch: "+statusm);
+				//cudaMemcpy(Pointer.to(h_piv), ipiv, n*Sizeof.INT, cudaMemcpyDeviceToHost);
 
 				stop = System.nanoTime();
 				time_solve = (stop - start) / 1e9;

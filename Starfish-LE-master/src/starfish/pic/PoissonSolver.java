@@ -115,7 +115,7 @@ public class PoissonSolver extends PotentialSolver
 	
 	/*call linear solver*/
 	if (method==Method.DIRECT)
-	    it = solveLU(mesh_data);
+	    it = solveLU1(mesh_data);
 	else if (method==Method.GS)
 	    it = solveLinearGS(mesh_data);
 	else if (method==Method.PCG)
