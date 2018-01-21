@@ -56,6 +56,8 @@ public class KineticMaterial extends Material
 	return spwt0;
     }
     protected long part_id_counter = 0;
+	public double[] part_vel0;
+	public double[] part_vel1;
 
     @Override
     public void init()
@@ -88,8 +90,15 @@ public class KineticMaterial extends Material
 	/*macroparticles per cell*/
 	field_manager2d.add("mpc-sum","#",null);
 	field_manager2d.add("mpc","#",null);
-	
-	
+
+//exceptions
+		JCudaDriver.setExceptionsEnabled(true);
+		// Initialize the driver and create a context for the first device.
+		cuInit(0);
+		CUdevice device = new CUdevice();
+		cuDeviceGet(device, 0);
+		CUcontext context = new CUcontext();
+		cuCtxCreate(context, 0, device);
     }
 
     boolean steady_state = false;	/*TODO: temporary hack to clear samples*/
@@ -122,8 +131,16 @@ public class KineticMaterial extends Material
 
 	total_momentum = 0;
 	/*first loop through all particles*/
+
 	for (MeshData md : mesh_data)
 	{
+		int size = md.all_particles.size();
+		this.part_vel0 = new double[size];
+		this.part_vel1 = new double[size];
+		for(int i=0; i <size;i++){
+			this.part_vel0[i] = md.all_particles.get(i).vel[0];
+			this.part_vel1[i] = md.all_particles.get(i).vel[1];
+		}
 	    moveParticles(md, false);
 	}
 
@@ -131,6 +148,13 @@ public class KineticMaterial extends Material
 	/*TODO: multiple loops*/
 	for (MeshData md : mesh_data)
 	{
+		int size = md.all_transfered_particles.size();
+		this.part_vel0 = new double[size];
+		this.part_vel1 = new double[size];
+		for(int i=0; i <size;i++){
+			this.part_vel0[i] = md.all_transfered_particles.get(i).vel[0];
+			this.part_vel1[i] = md.all_transfered_particles.get(i).vel[1];
+		}
 	    moveParticles(md, true);
 	}
 	
@@ -169,68 +193,6 @@ public class KineticMaterial extends Material
     /*updates field on a single mesh*/
     void moveParticles(MeshData md, boolean particle_transfer)
     {
-    	//jcuda test
-		int[] a = new int[3];
-		a[0] = 1;
-		a[1] = 2;
-		a[2] = 3;
-		int[] b = new int[3];
-		b[0] = 1;
-		b[1] = 2;
-		b[2] = 3;
-		int[] sum = new int[3];
-		JCudaDriver.setExceptionsEnabled(true);
-		// Initialize the driver and create a context for the first device.
-		cuInit(0);
-		CUdevice device = new CUdevice();
-		cuDeviceGet(device, 0);
-		CUcontext context = new CUcontext();
-		cuCtxCreate(context, 0, device);
-
-		CUdeviceptr aPtr = new CUdeviceptr();
-		int stat = cuMemAlloc(aPtr, 3*Sizeof.INT);
-		System.out.println(stat);
-		stat = cuMemcpyHtoD(aPtr, Pointer.to(a), Sizeof.INT*3);
-		System.out.println(stat);
-
-		CUdeviceptr bPtr = new CUdeviceptr();
-		cuMemAlloc(bPtr, Sizeof.INT*3);
-		cuMemcpyHtoD(bPtr, Pointer.to(b), Sizeof.INT*3);
-
-		CUdeviceptr sumPtr = new CUdeviceptr();
-		cuMemAlloc(sumPtr, Sizeof.INT*3);
-
-		CUmodule module = new CUmodule();
-		stat = cuModuleLoad(module, "pushParticleKernel.ptx");
-
-// Obtain a function pointer to the kernel function.
-		CUfunction function = new CUfunction();
-		cuModuleGetFunction(function, module, "add");
-
-		Pointer kernelParameters = Pointer.to(
-				Pointer.to(new int[]{3}),
-				Pointer.to(aPtr),
-				Pointer.to(bPtr),
-				Pointer.to(sumPtr)
-		);
-
-// Call the kernel function.
-		int blockSizeX = 256;
-		int gridSizeX = (int)Math.ceil((double)3 / blockSizeX);
-		stat = cuLaunchKernel(function,
-				gridSizeX,  1, 1,      // Grid dimension
-				blockSizeX, 1, 1,      // Block dimension
-				0, null,               // Shared memory size and stream
-				kernelParameters, null // Kernel- and extra parameters
-		);
-		System.out.println(stat);
-		stat = cuCtxSynchronize();
-		System.out.println(stat);
-
-		stat = cuMemcpyDtoH(Pointer.to(sum), sumPtr, Sizeof.INT * 3);
-
-		System.out.println(stat);
-		ArrayList<Particle> particles;
 		int size;
 
 		final int max_bounces = 10;		/*maximum number of surface bounces per step*/
@@ -258,6 +220,147 @@ public class KineticMaterial extends Material
 			size = md.all_transfered_particles.size();
 		}
 
+		//params for device
+		double[] part_lc0 = new double[size];
+		double[] part_lc1 = new double[size];
+		double[] part_dt = new double[size];
+		int[] part_alive = new int[size];
+		int particle_transfer_int;
+		particle_transfer_int = (particle_transfer) ? 1 : 0;
+		//for results
+		double ef_host[] = new double[2];
+		double bf_host[] = new double[2];
+
+
+		CUdeviceptr dev_lc0 = new CUdeviceptr();
+		CUdeviceptr dev_lc1 = new CUdeviceptr();
+		CUdeviceptr dev_vel0 = new CUdeviceptr();
+		CUdeviceptr dev_vel1 = new CUdeviceptr();
+		CUdeviceptr dev_dt = new CUdeviceptr();
+		CUdeviceptr dev_ef = new CUdeviceptr();
+		CUdeviceptr dev_bf = new CUdeviceptr();
+		CUdeviceptr dev_qm = new CUdeviceptr();
+		CUdeviceptr dev_alive = new CUdeviceptr();
+
+		CUdeviceptr dev_efi = new CUdeviceptr();
+		CUdeviceptr dev_efj = new CUdeviceptr();
+		CUdeviceptr dev_bfi = new CUdeviceptr();
+		CUdeviceptr dev_bfj = new CUdeviceptr();
+
+		CUdeviceptr dev_p_transfer= new CUdeviceptr();
+
+		for (int i = 0; i < size; i++){
+			Particle part;
+			if(!particle_transfer) {
+				part = md.all_particles.get(i);
+				part.dt += Starfish.getDt();
+			}
+			else
+				part = md.all_transfered_particles.get(i);
+
+			part_dt[i] = part.dt;
+			part_lc0[i] = part.lc[0];
+			part_lc1[i] = part.lc[1];
+			part_alive[i] = part.alive;
+
+		}
+		int r = md.Efj.ni;
+		int c = md.Efj.nj;
+		for(int i=0; i <r; i++){
+			for(int j=0; j<c;j++){
+				md.Efj.data1d[i*c+j] = md.Efj.data[i][j];
+			}
+		}
+		//malloc and copy
+		if(size != 0) {
+			int stat = cuMemAlloc(dev_dt, size * Sizeof.DOUBLE);
+			stat = cuMemcpyHtoD(dev_dt, Pointer.to(part_dt), Sizeof.DOUBLE * size);
+
+			stat = cuMemAlloc(dev_lc0, size * Sizeof.DOUBLE);
+			stat = cuMemcpyHtoD(dev_lc0, Pointer.to(part_lc0), Sizeof.DOUBLE * size);
+
+			stat = cuMemAlloc(dev_lc1, size * Sizeof.DOUBLE);
+			stat = cuMemcpyHtoD(dev_lc1, Pointer.to(part_lc1), Sizeof.DOUBLE * size);
+
+			stat = cuMemAlloc(dev_vel0, size * Sizeof.DOUBLE);
+			stat = cuMemcpyHtoD(dev_vel0, Pointer.to(part_vel0), Sizeof.DOUBLE * size);
+
+			stat = cuMemAlloc(dev_vel1, size * Sizeof.DOUBLE);
+			stat = cuMemcpyHtoD(dev_vel1, Pointer.to(part_vel1), Sizeof.DOUBLE * size);
+
+			stat = cuMemAlloc(dev_alive, size * Sizeof.INT);
+			stat = cuMemcpyHtoD(dev_alive, Pointer.to(part_alive), Sizeof.INT * size);
+
+			stat = cuMemAlloc(dev_ef, 2 * Sizeof.DOUBLE);
+			stat = cuMemAlloc(dev_bf, 2 * Sizeof.DOUBLE);
+
+			//stat = cuMemAlloc(dev_qm, Sizeof.DOUBLE);
+			//stat = cuMemcpyHtoD(dev_qm, Pointer.to(new double[]{q_over_m}), Sizeof.DOUBLE);
+
+			int data_size = Efi.ni * Efi.nj;
+			stat = cuMemAlloc(dev_efi, data_size * Sizeof.DOUBLE);
+			stat = cuMemcpyHtoD(dev_efi, Pointer.to(Efi.data1d), Sizeof.DOUBLE * data_size);
+
+			stat = cuMemAlloc(dev_efj, data_size * Sizeof.DOUBLE);
+			stat = cuMemcpyHtoD(dev_efj, Pointer.to(Efj.data1d), Sizeof.DOUBLE * data_size);
+
+			stat = cuMemAlloc(dev_bfi, data_size * Sizeof.DOUBLE);
+			stat = cuMemcpyHtoD(dev_bfi, Pointer.to(Bfi.data1d), Sizeof.DOUBLE * data_size);
+
+			stat = cuMemAlloc(dev_bfj, data_size * Sizeof.DOUBLE);
+			stat = cuMemcpyHtoD(dev_bfj, Pointer.to(Bfj.data1d), Sizeof.DOUBLE * data_size);
+
+			stat = cuMemAlloc(dev_p_transfer, Sizeof.INT);
+			stat = cuMemcpyHtoD(dev_p_transfer, Pointer.to(new int[]{particle_transfer_int}), Sizeof.INT);
+
+
+			//load module
+			CUmodule module = new CUmodule();
+			cuModuleLoad(module, "pushParticleKernel.ptx");
+
+			// Obtain a function pointer to the kernel function.
+			CUfunction function = new CUfunction();
+			cuModuleGetFunction(function, module, "pushParticle");
+
+			double dt = Starfish.getDt();
+			Pointer kernelParameters = Pointer.to(
+					Pointer.to(dev_lc0),
+					Pointer.to(dev_lc1),
+					Pointer.to(dev_vel0),
+					Pointer.to(dev_vel1),
+					Pointer.to(dev_dt),
+					Pointer.to(new double[]{q_over_m}),
+					Pointer.to(dev_efi),
+					Pointer.to(dev_efj),
+					Pointer.to(dev_bfi),
+					Pointer.to(dev_bfj),
+					Pointer.to(dev_p_transfer),
+					Pointer.to(dev_ef),
+					Pointer.to(dev_bf),
+					Pointer.to(dev_alive),
+					Pointer.to(new int[]{size}),
+					Pointer.to(new double[]{dt}),
+					Pointer.to(new int[]{c})
+			);
+
+			//call kernel to gather and update velocity
+			int blockSizeX = 256;
+			int gridSizeX = (int) Math.ceil((double) size / blockSizeX);
+			cuLaunchKernel(function,
+					gridSizeX, 1, 1,      // Grid dimension
+					blockSizeX, 1, 1,      // Block dimension
+					0, null,               // Shared memory size and stream
+					kernelParameters, null // Kernel- and extra parameters
+			);
+
+			cuCtxSynchronize();
+
+			cuMemcpyDtoH(Pointer.to(ef_host), dev_ef, Sizeof.DOUBLE * 2);
+			cuMemcpyDtoH(Pointer.to(bf_host), dev_bf, Sizeof.DOUBLE * 2);
+			cuMemcpyDtoH(Pointer.to(part_vel0), dev_vel0, Sizeof.DOUBLE * size);
+			cuMemcpyDtoH(Pointer.to(part_vel1), dev_vel1, Sizeof.DOUBLE * size);
+			cuMemcpyDtoH(Pointer.to(part_dt), dev_dt, Sizeof.DOUBLE*size);
+		}
 		for(int i = 0; i < size; i++)
 		{
 			Particle part;
@@ -267,29 +370,12 @@ public class KineticMaterial extends Material
 				part = md.all_transfered_particles.get(i);
 			if(part.alive == 0) {
 		/*increment particle time*/
-				if (!particle_transfer) {
-					part.dt += Starfish.getDt();
-				}
-
-	    /*update velocity*/
-				ef[0] = Efi.gather(part.lc);
-				ef[1] = Efj.gather(part.lc);
-
-	    /*update velocity*/
-				bf[0] = Bfi.gather(part.lc);
-				bf[1] = Bfj.gather(part.lc);
-
-	    /*update velocity*/
-				if (bf[0] == 0 && bf[1] == 0) {
-					part.vel[0] += q_over_m * ef[0] * part.dt;
-					part.vel[1] += q_over_m * ef[1] * part.dt;
-				} else {
-					UpdateVelocityBoris(part, ef, bf);
-				}
 
 				int bounces = 0;
 				boolean alive = true;
-
+				part.vel[0] = part_vel0[i];
+				part.vel[1] = part_vel1[i];
+				part.dt = part_dt[i];
 	    /*iterate while we have time remaining*/
 				while (part.dt > 0 && bounces++ < max_bounces) {
 		/*save old position*/
@@ -300,8 +386,14 @@ public class KineticMaterial extends Material
 					old_lc[1] = part.lc[1];
 
 		/*update position*/
-					part.pos[0] += part.vel[0] * part.dt;
-					part.pos[1] += part.vel[1] * part.dt;
+					/*if(part.vel[0] != part_vel0[i]){
+						System.out.println("0 : " + part.vel[0] + " " +part_vel0[i]);
+					}*/
+					/*if(part.vel[1] != part_vel1[i]){
+						System.out.println("1 -  : " + i + "    "+ part.vel[1] + " " +part_vel1[i]);
+					}*/
+					part.pos[0] += part_vel0[i] * part.dt;
+					part.pos[1] += part_vel1[i] * part.dt;
 
 					if (Starfish.getDomainType() == DomainType.RZ) {
 						rotateToRZ(part);
@@ -310,23 +402,25 @@ public class KineticMaterial extends Material
 					} else
 						part.pos[2] += part.vel[2] * part.dt;
 
+
 					part.lc = mesh.XtoL(part.pos);
 
 					Particle part_old = new Particle(part);
 
 		/*check if particle hit anything or left the domain*/
-					alive = ProcessBoundary(part, mesh, old, old_lc);
+					double[] part_vel = new double[]{part_vel0[i], part_vel1[i], part.vel[2]};
+					alive = ProcessBoundary(part, mesh, old, old_lc, part_vel1, i, part_vel);
 
 					if (alive && part.lc[0] > mesh.ni || part.lc[1] > mesh.nj) {
 						part = part_old;
-						alive = ProcessBoundary(part, mesh, old, old_lc);
+						alive = ProcessBoundary(part, mesh, old, old_lc, part_vel1, i, part_vel);
 
 					}
 					if (!alive) {
 						part = new Particle(part_old);
 
 						//  if (part.lc[1]<1)
-						alive = ProcessBoundary(part_old, mesh, old, old_lc);
+						alive = ProcessBoundary(part_old, mesh, old, old_lc, part_vel1, i, part_vel);
 						//iterator.remove();
 						if (particle_transfer)
 							md.all_transfered_particles.get(i).alive = 1;
@@ -343,11 +437,10 @@ public class KineticMaterial extends Material
 	    /*TODO: bottleneck since only one thread can access at once*/
 	    /*scatter data*/
 				if (alive) {
-					synchronized (this) {
 
 						Den.scatter(part.lc, part.spwt);
-						U.scatter(part.lc, part.vel[0] * part.spwt);
-						V.scatter(part.lc, part.vel[1] * part.spwt);
+						U.scatter(part.lc, part_vel0[i] * part.spwt);
+						V.scatter(part.lc, part_vel1[i] * part.spwt);
 						W.scatter(part.lc, part.vel[2] * part.spwt);
 
 		/*also add to the main list if transfer*/
@@ -359,7 +452,7 @@ public class KineticMaterial extends Material
 
 		/*save momentum for diagnostics, will be multiplied by mass in updatefields*/
 						total_momentum += part.spwt * Vector.mag2(part.vel);
-					}
+
 				}
 			}
 		}	/*end of particle loop*/
@@ -373,6 +466,16 @@ public class KineticMaterial extends Material
 	    ParticleMover mover = new ParticleMover(md,iterator,particle_transfer,"PartMover"+block);
 	    mover.run();
 	}*/
+	if(size!=0) {
+		cuMemFree(dev_lc0);
+		cuMemFree(dev_lc1);
+		cuMemFree(dev_vel0);
+		cuMemFree(dev_vel1);
+		cuMemFree(dev_dt);
+		cuMemFree(dev_ef);
+		cuMemFree(dev_bf);
+		cuMemFree(dev_qm);
+	}
     }
 
 	private void rotateToRZ(Particle part)
@@ -523,12 +626,12 @@ public class KineticMaterial extends Material
 		Particle part_old = new Particle(part);
 
 		/*check if particle hit anything or left the domain*/
-		alive = ProcessBoundary(part, mesh, old, old_lc);
+		alive = ProcessBoundary(part, mesh, old, old_lc, new double[]{1}, 1, new double[]{1,1,1});
 
 		if (alive && part.lc[0]>mesh.ni || part.lc[1]>mesh.nj)
 		{
 		    part = part_old;
-		    alive = ProcessBoundary(part, mesh, old, old_lc);
+		    alive = ProcessBoundary(part, mesh, old, old_lc, new double[]{1}, 1,new double[]{1,1,1});
 
 		}
 		if (!alive)
@@ -536,7 +639,7 @@ public class KineticMaterial extends Material
 		    part = new Particle(part_old);
 
 		  //  if (part.lc[1]<1)
-			alive = ProcessBoundary(part_old, mesh, old, old_lc);
+			alive = ProcessBoundary(part_old, mesh, old, old_lc, new double[]{1}, 1,new double[]{1,1,1});
 			if(!particle_transfer)
 				md.all_particles.remove(part_old);
 			else
@@ -625,7 +728,7 @@ public class KineticMaterial extends Material
      * @param id	return value, contains info about impact location
      * @return remaining dt, or -1 if absorbed
      */
-    boolean ProcessBoundary(Particle part, Mesh mesh, double old[], double lc_old[])
+    boolean ProcessBoundary(Particle part, Mesh mesh, double old[], double lc_old[], double vel[], int ind, double part_vel[])
     {
 	boolean left_mesh = false;
 	Face exit_face = null;
@@ -685,7 +788,7 @@ public class KineticMaterial extends Material
 	    {
 		/*skip over particles that collide with surface at the beginning of their time step,
 		 * as long as they are moving away from the surface*/
-		double acos=Vector.dot2(seg.normal(t[0]),part.vel)/Vector.mag2(part.vel);
+		double acos=Vector.dot2(seg.normal(t[0]),part_vel)/Vector.mag2(part_vel);
 		if (t_part<Constants.FLT_EPS &&		    //ignore direction for virtual walls since particles can pass through
 			(acos>0 || seg.getBoundaryType()==NodeType.VIRTUAL)) continue;
 		
@@ -717,7 +820,7 @@ public class KineticMaterial extends Material
 	    
 	    /*perform surface interaction*/
 	   if (target_mat!=null)
-		alive = target_mat.performSurfaceInteraction(part.vel, mat_index, seg_min, tsurf_min);
+		alive = target_mat.performSurfaceInteraction(part_vel, mat_index, seg_min, tsurf_min);
 	   
 	   //TODO: hack
 	   if (!alive && charge>0)
@@ -727,7 +830,7 @@ public class KineticMaterial extends Material
 	    if (boundary_hit.getType()==NodeType.SINK) alive = false;
 
 	    /*deposit flux and deposit, if stuck*/
-	    addSurfaceMomentum(boundary_hit, boundary_t, part.vel, part.spwt);
+	    addSurfaceMomentum(boundary_hit, boundary_t, part_vel, part.spwt);
 
 	    if (!alive)
 	    {
@@ -812,7 +915,8 @@ public class KineticMaterial extends Material
 		case SYMMETRY: 
 		    /*grab normal vector*/
 		    double n[] = mesh.boundaryNormal(exit_face,part.pos);
-		    part.vel = Vector.mirror(part.vel,n);
+		    part.vel = Vector.mirror(part_vel,n);
+		    vel[ind] = -1*vel[ind];
 		    return true;
 		case PERIODIC: /*TODO: implemented only for single mesh*/
 		    UniformMesh um = (UniformMesh)mesh;
@@ -1395,26 +1499,27 @@ public class KineticMaterial extends Material
 	Field2D T3 = this.field_manager2d.get(md.mesh,"t3");	
 	Field2D mpc_sum = this.field_manager2d.get(md.mesh, "mpc-sum");
 
-	
-	
-	
-	
-	Iterator<Particle> iterator = md.getIterator();
-	while (iterator.hasNext())
-	{
-	    Particle part = iterator.next();
-	    u_sum.scatter(part.lc, part.spwt * part.vel[0]);
-	    v_sum.scatter(part.lc, part.spwt * part.vel[1]);
-	    w_sum.scatter(part.lc, part.spwt * part.vel[2]);
-	    uu_sum.scatter(part.lc, part.spwt * part.vel[0]*part.vel[0]);
-	    vv_sum.scatter(part.lc, part.spwt * part.vel[1]*part.vel[1]);
-	    ww_sum.scatter(part.lc, part.spwt * part.vel[2]*part.vel[2]);	    
-	    count_sum.scatter(part.lc, part.spwt);
-	    
-	    //mpc is cell data
-	    mpc_sum.add((int)part.lc[0], (int)part.lc[1], 1);
-	}
-	
+
+		int size = md.all_particles.size();
+		for(int x = 0; x < size; x++) {
+			Particle part;
+			part = md.all_particles.get(x);
+			if (part.alive == 0) {
+
+				u_sum.scatter(part.lc, part.spwt * part.vel[0]);
+				v_sum.scatter(part.lc, part.spwt * part.vel[1]);
+				w_sum.scatter(part.lc, part.spwt * part.vel[2]);
+				uu_sum.scatter(part.lc, part.spwt * part.vel[0] * part.vel[0]);
+				vv_sum.scatter(part.lc, part.spwt * part.vel[1] * part.vel[1]);
+				ww_sum.scatter(part.lc, part.spwt * part.vel[2] * part.vel[2]);
+				count_sum.scatter(part.lc, part.spwt);
+
+				//mpc is cell data
+				mpc_sum.add((int) part.lc[0], (int) part.lc[1], 1);
+
+			}
+		}
+
 	//increment counter, used for density
 	num_samples++;
 	
@@ -1436,13 +1541,23 @@ public class KineticMaterial extends Material
 		     T1.data[i][j] = uu*f;
 		     T2.data[i][j] = vv*f;
 		     T3.data[i][j] = ww*f;
+
+		     T.data1d[i*T.nj+j] = (uu+vv+ww)*f/3.0;
+			 T1.data1d[i*T.nj+j] = uu*f;
+			 T2.data1d[i*T.nj+j] = vv*f;
+			 T3.data1d[i*T.nj+j] = ww*f;
 		 }
 		 else
 		 {
 		     T.data[i][j] = -1;
 		     T1.data[i][j] = -1;
 		     T2.data[i][j] = -1;
-		     T3.data[i][j] = -1;  
+		     T3.data[i][j] = -1;
+
+			 T.data1d[i*T.nj+j] = -1;
+			 T1.data1d[i*T.nj+j] = -1;
+			 T2.data1d[i*T.nj+j] = -1;
+			 T3.data1d[i*T.nj+j] = -1;
 		 }
 	    }
 	
@@ -1460,8 +1575,11 @@ public class KineticMaterial extends Material
 	
 	/*set pressure*/
 	for (int i=0;i<md.mesh.ni;i++)
-	    for (int j=0;j<md.mesh.nj;j++)
-		p.data[i][j] = nd_ave.at(i,j)*Constants.K*T.at(i,j);
+	    for (int j=0;j<md.mesh.nj;j++){
+			double val = nd_ave.at(i,j)*Constants.K*T.at(i,j);
+			p.data[i][j] = val;
+			p.data1d[i*p.nj+j] = val;
+		}
 	
 	/*macroparticles per cell*/
 	Field2D mpc = this.field_manager2d.get(md.mesh,"mpc");	

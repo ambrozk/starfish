@@ -10,45 +10,169 @@
 .target sm_20
 .address_size 64
 
-	// .globl	add
+	// .globl	pushParticle
 
-.visible .entry add(
-	.param .u32 add_param_0,
-	.param .u64 add_param_1,
-	.param .u64 add_param_2,
-	.param .u64 add_param_3
+.visible .entry pushParticle(
+	.param .u64 pushParticle_param_0,
+	.param .u64 pushParticle_param_1,
+	.param .u64 pushParticle_param_2,
+	.param .u64 pushParticle_param_3,
+	.param .u64 pushParticle_param_4,
+	.param .f64 pushParticle_param_5,
+	.param .u64 pushParticle_param_6,
+	.param .u64 pushParticle_param_7,
+	.param .u64 pushParticle_param_8,
+	.param .u64 pushParticle_param_9,
+	.param .u32 pushParticle_param_10,
+	.param .u64 pushParticle_param_11,
+	.param .u64 pushParticle_param_12,
+	.param .u64 pushParticle_param_13,
+	.param .u32 pushParticle_param_14,
+	.param .f64 pushParticle_param_15,
+	.param .u32 pushParticle_param_16
 )
 {
-	.reg .pred 	%p<2>;
-	.reg .f32 	%f<4>;
-	.reg .b32 	%r<6>;
-	.reg .b64 	%rd<11>;
+	.reg .pred 	%p<4>;
+	.reg .b32 	%r<14>;
+	.reg .f64 	%fd<60>;
+	.reg .b64 	%rd<45>;
 
 
-	ld.param.u32 	%r2, [add_param_0];
-	ld.param.u64 	%rd1, [add_param_1];
-	ld.param.u64 	%rd2, [add_param_2];
-	ld.param.u64 	%rd3, [add_param_3];
-	mov.u32 	%r3, %ctaid.x;
-	mov.u32 	%r4, %ntid.x;
-	mov.u32 	%r5, %tid.x;
-	mad.lo.s32 	%r1, %r4, %r3, %r5;
-	setp.ge.s32	%p1, %r1, %r2;
-	@%p1 bra 	BB0_2;
+	ld.param.u64 	%rd3, [pushParticle_param_0];
+	ld.param.u64 	%rd4, [pushParticle_param_1];
+	ld.param.u64 	%rd5, [pushParticle_param_2];
+	ld.param.u64 	%rd6, [pushParticle_param_3];
+	ld.param.u64 	%rd7, [pushParticle_param_4];
+	ld.param.f64 	%fd1, [pushParticle_param_5];
+	ld.param.u64 	%rd8, [pushParticle_param_6];
+	ld.param.u64 	%rd9, [pushParticle_param_7];
+	ld.param.u64 	%rd10, [pushParticle_param_8];
+	ld.param.u64 	%rd11, [pushParticle_param_9];
+	ld.param.u32 	%r2, [pushParticle_param_10];
+	ld.param.u64 	%rd12, [pushParticle_param_11];
+	ld.param.u64 	%rd13, [pushParticle_param_12];
+	ld.param.u64 	%rd14, [pushParticle_param_13];
+	ld.param.u32 	%r4, [pushParticle_param_14];
+	ld.param.f64 	%fd2, [pushParticle_param_15];
+	ld.param.u32 	%r3, [pushParticle_param_16];
+	mov.u32 	%r5, %ntid.x;
+	mov.u32 	%r6, %ctaid.x;
+	mov.u32 	%r7, %tid.x;
+	mad.lo.s32 	%r1, %r5, %r6, %r7;
+	setp.ge.s32	%p1, %r1, %r4;
+	@%p1 bra 	BB0_5;
 
-	cvta.to.global.u64 	%rd4, %rd1;
-	mul.wide.s32 	%rd5, %r1, 4;
-	add.s64 	%rd6, %rd4, %rd5;
-	cvta.to.global.u64 	%rd7, %rd2;
-	add.s64 	%rd8, %rd7, %rd5;
-	ld.global.f32 	%f1, [%rd8];
-	ld.global.f32 	%f2, [%rd6];
-	add.f32 	%f3, %f2, %f1;
-	cvta.to.global.u64 	%rd9, %rd3;
-	add.s64 	%rd10, %rd9, %rd5;
-	st.global.f32 	[%rd10], %f3;
+	cvta.to.global.u64 	%rd15, %rd14;
+	cvt.s64.s32	%rd1, %r1;
+	mul.wide.s32 	%rd16, %r1, 4;
+	add.s64 	%rd17, %rd15, %rd16;
+	ld.global.u32 	%r8, [%rd17];
+	setp.ne.s32	%p2, %r8, 0;
+	@%p2 bra 	BB0_5;
 
-BB0_2:
+	cvta.to.global.u64 	%rd18, %rd7;
+	setp.eq.s32	%p3, %r2, 0;
+	shl.b64 	%rd19, %rd1, 3;
+	add.s64 	%rd2, %rd18, %rd19;
+	@%p3 bra 	BB0_4;
+
+	ld.global.f64 	%fd3, [%rd2];
+	add.f64 	%fd4, %fd3, %fd2;
+	st.global.f64 	[%rd2], %fd4;
+
+BB0_4:
+	cvta.to.global.u64 	%rd20, %rd6;
+	cvta.to.global.u64 	%rd21, %rd5;
+	cvta.to.global.u64 	%rd22, %rd13;
+	cvta.to.global.u64 	%rd23, %rd12;
+	cvta.to.global.u64 	%rd24, %rd11;
+	cvta.to.global.u64 	%rd25, %rd10;
+	cvta.to.global.u64 	%rd26, %rd9;
+	cvta.to.global.u64 	%rd27, %rd8;
+	cvta.to.global.u64 	%rd28, %rd3;
+	add.s64 	%rd30, %rd28, %rd19;
+	cvta.to.global.u64 	%rd31, %rd4;
+	add.s64 	%rd32, %rd31, %rd19;
+	ld.global.f64 	%fd5, [%rd30];
+	cvt.rzi.s32.f64	%r9, %fd5;
+	ld.global.f64 	%fd6, [%rd32];
+	cvt.rzi.s32.f64	%r10, %fd6;
+	cvt.rn.f64.s32	%fd7, %r9;
+	sub.f64 	%fd8, %fd5, %fd7;
+	cvt.rn.f64.s32	%fd9, %r10;
+	sub.f64 	%fd10, %fd6, %fd9;
+	mov.f64 	%fd11, 0d3FF0000000000000;
+	sub.f64 	%fd12, %fd11, %fd8;
+	sub.f64 	%fd13, %fd11, %fd10;
+	mul.f64 	%fd14, %fd12, %fd13;
+	mad.lo.s32 	%r11, %r9, %r3, %r10;
+	mul.wide.s32 	%rd33, %r11, 8;
+	add.s64 	%rd34, %rd27, %rd33;
+	ld.global.f64 	%fd15, [%rd34];
+	mul.f64 	%fd16, %fd8, %fd13;
+	add.s32 	%r12, %r9, 1;
+	mad.lo.s32 	%r13, %r12, %r3, %r10;
+	mul.wide.s32 	%rd35, %r13, 8;
+	add.s64 	%rd36, %rd27, %rd35;
+	ld.global.f64 	%fd17, [%rd36];
+	mul.f64 	%fd18, %fd17, %fd16;
+	fma.rn.f64 	%fd19, %fd15, %fd14, %fd18;
+	mul.f64 	%fd20, %fd8, %fd10;
+	ld.global.f64 	%fd21, [%rd36+8];
+	fma.rn.f64 	%fd22, %fd20, %fd21, %fd19;
+	mul.f64 	%fd23, %fd12, %fd10;
+	ld.global.f64 	%fd24, [%rd34+8];
+	fma.rn.f64 	%fd25, %fd23, %fd24, %fd22;
+	add.s64 	%rd37, %rd26, %rd33;
+	ld.global.f64 	%fd26, [%rd37];
+	add.s64 	%rd38, %rd26, %rd35;
+	ld.global.f64 	%fd27, [%rd38];
+	mul.f64 	%fd28, %fd16, %fd27;
+	fma.rn.f64 	%fd29, %fd14, %fd26, %fd28;
+	ld.global.f64 	%fd30, [%rd38+8];
+	fma.rn.f64 	%fd31, %fd20, %fd30, %fd29;
+	ld.global.f64 	%fd32, [%rd37+8];
+	fma.rn.f64 	%fd33, %fd23, %fd32, %fd31;
+	add.s64 	%rd39, %rd25, %rd33;
+	ld.global.f64 	%fd34, [%rd39];
+	add.s64 	%rd40, %rd25, %rd35;
+	ld.global.f64 	%fd35, [%rd40];
+	mul.f64 	%fd36, %fd16, %fd35;
+	fma.rn.f64 	%fd37, %fd14, %fd34, %fd36;
+	ld.global.f64 	%fd38, [%rd40+8];
+	fma.rn.f64 	%fd39, %fd20, %fd38, %fd37;
+	ld.global.f64 	%fd40, [%rd39+8];
+	fma.rn.f64 	%fd41, %fd23, %fd40, %fd39;
+	add.s64 	%rd41, %rd24, %rd33;
+	ld.global.f64 	%fd42, [%rd41];
+	add.s64 	%rd42, %rd24, %rd35;
+	ld.global.f64 	%fd43, [%rd42];
+	mul.f64 	%fd44, %fd16, %fd43;
+	fma.rn.f64 	%fd45, %fd14, %fd42, %fd44;
+	ld.global.f64 	%fd46, [%rd42+8];
+	fma.rn.f64 	%fd47, %fd20, %fd46, %fd45;
+	ld.global.f64 	%fd48, [%rd41+8];
+	fma.rn.f64 	%fd49, %fd23, %fd48, %fd47;
+	st.global.f64 	[%rd23], %fd25;
+	st.global.f64 	[%rd23+8], %fd33;
+	st.global.f64 	[%rd22], %fd41;
+	st.global.f64 	[%rd22+8], %fd49;
+	ld.global.f64 	%fd50, [%rd23];
+	mul.f64 	%fd51, %fd50, %fd1;
+	ld.global.f64 	%fd52, [%rd2];
+	add.s64 	%rd43, %rd21, %rd19;
+	ld.global.f64 	%fd53, [%rd43];
+	fma.rn.f64 	%fd54, %fd51, %fd52, %fd53;
+	st.global.f64 	[%rd43], %fd54;
+	ld.global.f64 	%fd55, [%rd23+8];
+	mul.f64 	%fd56, %fd55, %fd1;
+	ld.global.f64 	%fd57, [%rd2];
+	add.s64 	%rd44, %rd20, %rd19;
+	ld.global.f64 	%fd58, [%rd44];
+	fma.rn.f64 	%fd59, %fd56, %fd57, %fd58;
+	st.global.f64 	[%rd44], %fd59;
+
+BB0_5:
 	ret;
 }
 

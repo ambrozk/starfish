@@ -170,11 +170,14 @@ public abstract class Mesh
 	int i,j;
 	
 	node_vol = Starfish.getFieldCollection("NodeVol").getField(this);
-		
+
 	/*compute node volumes on open nodes*/
 	for (i=0;i<ni;i++)
-	    for (j=0;j<nj;j++ )
-		node_vol.set(i,j,nodeVol(i,j));     
+	    for (j=0;j<nj;j++ ) {
+			double val = nodeVol(i, j);
+			node_vol.set(i, j, val);
+			node_vol.data1d[i*nj + j] = val;
+		}
 	
 	/*now repeat, but use monte carlo on interface nodes to correct volumes*/
 	for (i=0;i<ni;i++)
@@ -518,8 +521,10 @@ public abstract class Mesh
 	
 
 	//scale node volume, but only on interface nodes (fully internal are left alone so can visualize leaks)
-	if (good>0)
-	    node_vol.data[i][j]*=good/(double)(inside);
+	if (good>0) {
+		node_vol.data[i][j] *= good / (double) (inside);
+		node_vol.data1d[i * nj + j] *= good / (double) (inside);
+	}
 	
     }
     

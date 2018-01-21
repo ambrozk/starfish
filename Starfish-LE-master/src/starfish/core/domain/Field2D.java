@@ -30,7 +30,8 @@ public class Field2D
         if (cell_centered) {ni = mesh.ni-1; nj = mesh.nj-1;}
 	else {ni = mesh.ni; nj = mesh.nj;}
 
-        data = new double[ni][nj]; 
+        data = new double[ni][nj];
+        data1d = new double[ni*nj];
     }
 
     /** constructor for field not associated with a particular mesh, should
@@ -41,7 +42,8 @@ public class Field2D
 	this.ni = ni;
 	this.nj = nj;
 	this.mesh = null;
-	data = new double[ni][nj]; 
+	data = new double[ni][nj];
+	data1d = new double[ni*nj];
     }
 	
     public Field2D(Mesh mesh, double values[][]) 
@@ -58,18 +60,21 @@ public class Field2D
     
     public double data[][]; 
     final Mesh mesh;
+
+    public double data1d[];
 	
     public int getNi() {return ni;}
     public int getNj() {return nj;}
     public Mesh getMesh() {return mesh;}
     public double[] pos(double fi, double fj) {return mesh.pos(fi,fj);}
     /*methods*/
-    
+
+    public void init_data(int r, int c) {this.data1d = new double[r*c];}
     /**at: returns value at [i,j]*/
     public double at(int i, int j) {return data[i][j];}
 
     /**set: sets value at i,j*/
-    public void set(int i, int j, double v) {data[i][j]=v;}
+    public void set(int i, int j, double v) {data[i][j]=v; data1d[i*nj+j]=v;}
     
     /**returns pointer to data*/
     public double[][] getData() {return data;}
@@ -105,32 +110,40 @@ public class Field2D
     }
 
     /**sets all data to the same value*/
-    public void setValue(double value) 
+    public void setValue(double value)
     {
 	for (int i=0;i<ni;i++)
-	    for (int j=0;j<nj;j++)
-		data[i][j]=value;
+	    for (int j=0;j<nj;j++) {
+			data[i][j] = value;
+			data1d[i*nj+j] = value;
+		}
     }
 
     /**adds a scalar to all values*/
     public void mult(double val) 
     {
 	for (int i=0;i<ni;i++)
-	    for (int j=0;j<nj;j++)
-		data[i][j]*=val;
+	    for (int j=0;j<nj;j++){
+			data[i][j]*=val;
+			data1d[i*nj+j] = val;
+		}
+
     }
 
     /**adds a scalar to all values*/
     public void add(double val) 
     {
 	for (int i=0;i<ni;i++)
-	    for (int j=0;j<nj;j++)
-		data[i][j]+=val;
+	    for (int j=0;j<nj;j++) {
+			data[i][j] += val;
+			data1d[i*nj+j] += val;
+		}
     }
     
     public void add(int i, int j, double val) 
     {
-	data[i][j]+=val;
+		data1d[i*nj+j] += val;
+		data[i][j]+=val;
     }
     
     
@@ -139,16 +152,21 @@ public class Field2D
     public void add(Field2D field)
     {
 	for (int i=0;i<ni;i++)
-	    for (int j=0;j<nj;j++)
-		data[i][j] += field.data[i][j];
+	    for (int j=0;j<nj;j++) {
+			data[i][j] += field.data[i][j];
+			data1d[i*nj+j]+= field.data[i][j];
+		}
     }
     
     /**fills the entire array the value*/
     public void fill(double val)
     {
 	for (int i=0;i<ni;i++)
-	    for (int j=0;j<nj;j++)
-		data[i][j]=val;
+	    for (int j=0;j<nj;j++){
+			data[i][j]=val;
+			data1d[i*nj+j]=val;
+		}
+
     }
 
     public void scatter(double fi[], double val)
@@ -188,6 +206,11 @@ public class Field2D
 	data[i+1][j] += di*(1-dj)*val;
 	data[i+1][j+1] += di*dj*val;
 	data[i][j+1] += (1-di)*dj*val;
+
+		data1d[i*nj+j] += (1-di)*(1-dj)*val;
+		data1d[(i+1)*nj+j] += di*(1-dj)*val;
+		data1d[(i+1)*nj+j+1] += di*dj*val;
+		data1d[i*nj+j+1] += (1-di)*dj*val;
 	
     }
     
@@ -262,10 +285,14 @@ public class Field2D
 	
 	for (int i=0;i<ni;i++)
 	    for (int j=0;j<nj;j++)
-		if (field.data[i][j]!=0)
-		    data[i][j]/=field.data[i][j];
-		else 
-		    data[i][j] = 0;
+		if (field.data[i][j]!=0){
+			data[i][j]/=field.data[i][j];
+			data1d[i*nj+j]/=field.data[i][j];
+		}
+		else {
+			data[i][j] = 0;
+			data1d[i*nj+j] = 0;
+		}
     }
 
 	
@@ -277,7 +304,8 @@ public class Field2D
 	for (int i=0;i<ni;i++)
 	    for (int j=0;j<nj;j++)
 	    {
-		data[i][j]/=node_vol[i][j];	
+		data[i][j]/=node_vol[i][j];
+			data1d[i*nj+j]/=node_vol[i][j];
 		
 		if (Double.isNaN(data[i][j])||Double.isInfinite(data[i][j]))
 		    System.out.printf("NaN at %d %d, vol:%g\n",i,j,node_vol[i][j]);

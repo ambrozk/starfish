@@ -192,6 +192,7 @@ public class FieldCollection2D
 			    mesh.node[i][j].type == NodeType.PERIODIC)
 			{
 			    field.data[i][j]+=bc[i].buffer;
+			    field.data1d[i*field.nj+j]+=bc[i].buffer;
 			    
 			    bc[i].buffer=0;
 			}
@@ -208,7 +209,9 @@ public class FieldCollection2D
 			    mesh.node[i][j].type == NodeType.PERIODIC)
 			{
 			    field.data[i][j]+=bc[j].buffer;
+				field.data1d[i*field.nj+j]+=bc[j].buffer;
 			    field.data[i][j]*=0.5;
+				field.data1d[i*field.nj+j]*=0.5;
 			    bc[j].buffer=0;
 			}
 		    }
